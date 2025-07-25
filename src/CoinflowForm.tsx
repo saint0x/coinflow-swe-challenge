@@ -44,254 +44,6 @@ type PaymentMethod = {
 
 type CheckoutState = 'idle' | 'loading' | 'processing' | 'success' | 'error';
 
-/**
- * PCI-compliant checkout implementation using Coinflow's individual card components.
- * 
- * NOTE: These components require TokenEx iframe initialization which is blocked on localhost.
- * The merchant "swe-challenge" only allows requests from whitelisted domains.
- * To test locally, you need to either:
- * 1. Deploy to a domain that can be whitelisted
- * 2. Use a tunnel service (ngrok) and request whitelisting
- * 3. Get a development merchant ID from Coinflow that allows localhost
- */
-function PciCompliantCheckout({
-  onSuccess,
-  subtotal,
-}: {
-  onSuccess: () => void;
-  subtotal: {cents: number;};
-}) {
-  const { wallet, connection } = useWallet();
-  const [state, setState] = useState<CheckoutState>('idle');
-  const [error, setError] = useState<string | null>(null);
-  const [useNewCard, setUseNewCard] = useState(true);
-  const [savedCards, setSavedCards] = useState<PaymentMethod[]>([]);
-  const [selectedCard, setSelectedCard] = useState<PaymentMethod | null>(null);
-  const [totals, setTotals] = useState<{fees?: number} | null>(null);
-
-  // Required origins for Coinflow components
-  const allowedOrigins = JSON.stringify(['http://localhost:3000', 'http://127.0.0.1:3000']);
-
-  // Refs for tokenization
-  interface TokenResponse {
-    token: string;
-    tokenHMAC?: string;
-    referenceNumber?: string;
-  }
-  const cardNumberRef = useRef<{getToken(): Promise<TokenResponse>} | null>(null);
-  const cvvOnlyRef = useRef<{getToken(): Promise<TokenResponse>} | null>(null);
-
-  // Form state for billing information
-  const [billingInfo, setBillingInfo] = useState({
-    name: '',
-    email: '',
-    address: '',
-    city: '',
-    state: '',
-    zip: '',
-    country: 'US'
-  });
-  
-  // Expiry date state
-  const [expiryDate, setExpiryDate] = useState('');
-
-  // Initialize on mount
-  React.useEffect(() => {
-    if (wallet?.publicKey) {
-      loadSavedCards();
-      loadTotals();
-    }
-  }, [wallet?.publicKey]);
-
-  const loadTotals = async () => {
-    if (!wallet?.publicKey) return;
-    
-    try {
-      const response = await fetch(`https://api-sandbox.coinflow.cash/api/checkout/totals/swe-challenge`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-coinflow-auth-wallet': wallet.publicKey.toString(),
-          'x-coinflow-auth-blockchain': 'solana'
-        },
-        body: JSON.stringify({
-          subtotal: subtotal,
-          blockchain: 'solana',
-          wallet: wallet.publicKey.toString()
-        })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setTotals(data);
-      } else {
-        setTotals({ fees: 50 }); // Default fee
-      }
-    } catch (error) {
-      setTotals({ fees: 50 }); // Default fee
-    }
-  };
-
-
-  const loadSavedCards = async () => {
-    // In a real implementation, this would fetch saved cards from the API
-    // For now, we'll simulate with empty array
-    setSavedCards([]);
-  };
-
-  const handleNewCardPayment = async () => {
-    if (!cardNumberRef.current) {
-      setError('Card form not ready - components not initialized');
-      return;
-    }
-
-    if (!expiryDate || expiryDate.length < 5) {
-      setError('Please enter a valid expiry date');
-      return;
-    }
-
-    if (!billingInfo.name || !billingInfo.email || !billingInfo.address || 
-        !billingInfo.city || !billingInfo.state || !billingInfo.zip) {
-      setError('Please fill in all billing information');
-      return;
-    }
-
-    try {
-      setState('processing');
-      setError(null);
-
-      // Get the tokenized card data from the Coinflow components
-      const cardTokenResponse = await cardNumberRef.current.getToken();
-      
-      // Parse expiry date
-      const [expMonth, expYear] = expiryDate.split('/');
-      const fullExpYear = expYear.length === 2 ? `20${expYear}` : expYear;
-      
-      // Prepare the payment payload according to Coinflow API docs
-      const paymentPayload = {
-        subtotal: subtotal,
-        transactionData: {
-          type: "safeMint"
-        },
-        authentication3DS: {
-          concludeChallenge: true,
-          deviceInfo: {
-            completionIndicator: 1
-          }
-        },
-        card: {
-          expYear: fullExpYear,
-          expMonth: expMonth,
-          email: billingInfo.email,
-          firstName: billingInfo.name.split(' ')[0] || 'test',
-          lastName: billingInfo.name.split(' ')[1] || 'test',
-          address1: billingInfo.address,
-          city: billingInfo.city,
-          zip: billingInfo.zip,
-          state: billingInfo.state,
-          country: billingInfo.country,
-          cardToken: cardTokenResponse.token
-        }
-      };
-
-
-      const response = await fetch(`https://api-sandbox.coinflow.cash/api/checkout/card/swe-challenge`, {
-        method: 'POST',
-        headers: {
-          'accept': 'application/json',
-          'content-type': 'application/json',
-          'x-coinflow-auth-wallet': wallet?.publicKey?.toString() || '',
-          'x-coinflow-auth-blockchain': 'solana'
-        },
-        body: JSON.stringify(paymentPayload),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.message || `Payment failed: ${response.status}`);
-      }
-      
-      setState('success');
-      onSuccess();
-      
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Payment failed');
-      setState('error');
-    }
-  };
-
-  const handleSavedCardPayment = async () => {
-    if (!selectedCard || !cvvOnlyRef.current) {
-      setError('Please select a card and enter CVV');
-      return;
-    }
-
-    try {
-      setState('processing');
-      setError(null);
-
-      // Get the refreshed token with CVV
-      const cvvTokenResponse = await cvvOnlyRef.current.getToken();
-      
-      // Prepare the payment payload for saved card according to API docs
-      const paymentPayload = {
-        subtotal: subtotal,
-        transactionData: {
-          type: "safeMint"
-        },
-        authentication3DS: {
-          concludeChallenge: true,
-          deviceInfo: {
-            completionIndicator: 1
-          }
-        },
-        token: cvvTokenResponse.token
-      };
-
-
-      const response = await fetch(`https://api-sandbox.coinflow.cash/api/checkout/token/swe-challenge`, {
-        method: 'POST',
-        headers: {
-          'accept': 'application/json',
-          'content-type': 'application/json',
-          'x-coinflow-auth-wallet': wallet?.publicKey?.toString() || '',
-          'x-coinflow-auth-blockchain': 'solana'
-        },
-        body: JSON.stringify(paymentPayload),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.message || `Payment failed: ${response.status}`);
-      }
-      
-      setState('success');
-      onSuccess();
-      
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Payment failed');
-      setState('error');
-    }
-  };
-
-
-  const cardInputStyles = JSON.stringify({
-    base: 'font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif; padding: 12px 16px; border: 1px solid #d1d5db; margin: 0; width: 100%; font-size: 14px; line-height: 20px; height: 48px; box-sizing: border-box; border-radius: 8px; background: white !important;',
-    focus: 'box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1); border: 1px solid #3b82f6; outline: 0;',
-    error: 'box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1); border: 1px solid #ef4444;',
-    cvv: {
-      base: 'font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif; padding: 12px 16px; border: 1px solid #d1d5db; margin: 0; width: 100%; font-size: 14px; line-height: 20px; height: 48px; box-sizing: border-box; border-radius: 8px; background: white !important;',
-      focus: 'box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1); border: 1px solid #3b82f6; outline: 0;',
-      error: 'box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1); border: 1px solid #ef4444;',
-    }
-  });
-
-  // Wallet should be stable from parent component (App.tsx)
-
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-6">
       {/* Header */}
       <div>
         <h2 className="text-xl font-semibold text-gray-900">Complete Purchase</h2>
@@ -342,7 +94,7 @@ function PciCompliantCheckout({
               origins={allowedOrigins}
             />
           </div>
-          
+
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -368,7 +120,7 @@ function PciCompliantCheckout({
                 CVV
               </label>
               <div className="w-full h-12 border border-gray-300 rounded-md">
-                <CoinflowCvvInput 
+                <CoinflowCvvInput
                   merchantId="swe-challenge"
                   env="sandbox"
                   css={cardInputStyles}
@@ -381,7 +133,7 @@ function PciCompliantCheckout({
           {/* Billing Information */}
           <div className="space-y-4">
             <h3 className="text-lg font-medium text-gray-900">Billing Information</h3>
-            
+
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
