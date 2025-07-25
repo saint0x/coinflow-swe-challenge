@@ -44,16 +44,6 @@ Coinflow Software Engineer Take Home
   - Optimized React hooks with proper dependency management
   - Clean separation of concerns between UI and business logic
 
-  Code Organization
-
-  src/
-  ├── components/
-  │   ├── SavedCardRow.tsx      # Individual saved card component
-  │   └── ErrorBoundary.tsx     # Error boundary wrapper
-  ├── utils/
-  │   └── tokenex.ts           # Centralized TokenEx styling
-  └── CoinflowForm.tsx         # Main payment component
-
   Key Technical Decisions
 
   TokenEx Integration: Used individual card components
