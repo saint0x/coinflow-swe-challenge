@@ -68,8 +68,12 @@ function PciCompliantCheckout({
   const [selectedCard, setSelectedCard] = useState<PaymentMethod | null>(null);
   const [totals, setTotals] = useState<{ fees?: number } | null>(null);
 
-  // Required origins for Coinflow components
-  const allowedOrigins = ["http://localhost:3000", "http://127.0.0.1:3000"];
+  // Required origins for Coinflow components - must match exactly what's whitelisted
+  const allowedOrigins = [
+    "http://localhost:3000",
+    "http://localhost:3001", 
+    "http://localhost:3002"
+  ];
 
   // Refs for tokenization
   interface TokenResponse {
@@ -105,6 +109,29 @@ function PciCompliantCheckout({
       loadTotals();
     }
   }, [wallet?.publicKey]);
+
+  // Monitor TokenEx availability (one-time check)
+  React.useEffect(() => {
+    if (!wallet?.publicKey) return;
+    
+    const checkOnce = () => {
+      const hasTokenEx = typeof window !== 'undefined' && (window as any).TokenEx;
+      console.log('TokenEx availability:', hasTokenEx);
+    };
+    
+    // Check once after a short delay
+    const timeout = setTimeout(checkOnce, 3000);
+    return () => clearTimeout(timeout);
+  }, [wallet?.publicKey]);
+
+  // Debug wallet state for Coinflow components
+  React.useEffect(() => {
+    console.log("Wallet state for Coinflow:", { 
+      connected: !!wallet?.publicKey,
+      publicKey: wallet?.publicKey?.toString() 
+    });
+  }, [wallet?.publicKey]);
+
 
   const loadTotals = async () => {
     if (!wallet?.publicKey) return;
@@ -171,26 +198,31 @@ function PciCompliantCheckout({
       setError(null);
 
       // Get the tokenized card data from the Coinflow components
+      console.log("Getting token from card input...");
       const cardTokenResponse = await cardNumberRef.current.getToken();
+      console.log("Token response:", cardTokenResponse);
+
+      if (!cardTokenResponse || !cardTokenResponse.token) {
+        throw new Error("Failed to tokenize card data. Please check your card number.");
+      }
 
       // Parse expiry date
       const [expMonth, expYear] = expiryDate.split("/");
-      const fullExpYear = expYear.length === 2 ? `20${expYear}` : expYear;
+      // Ensure expYear is exactly 2 digits
+      const formattedExpYear = expYear.length === 4 ? expYear.slice(-2) : expYear.padStart(2, '0');
 
       // Prepare the payment payload according to Coinflow API docs
       const paymentPayload = {
         subtotal: subtotal,
-        transactionData: {
-          type: "safeMint",
-        },
         authentication3DS: {
           concludeChallenge: true,
-          deviceInfo: {
-            completionIndicator: 1,
-          },
+          colorDepth: 24,
+          screenHeight: 1080,
+          screenWidth: 1920,
+          timeZone: -240
         },
         card: {
-          expYear: fullExpYear,
+          expYear: formattedExpYear,
           expMonth: expMonth,
           email: billingInfo.email,
           firstName: billingInfo.name.split(" ")[0] || "test",
@@ -198,11 +230,13 @@ function PciCompliantCheckout({
           address1: billingInfo.address,
           city: billingInfo.city,
           zip: billingInfo.zip,
-          state: billingInfo.state,
+          state: billingInfo.state.length > 2 ? "NY" : billingInfo.state,
           country: billingInfo.country,
           cardToken: cardTokenResponse.token,
         },
       };
+
+      console.log("Payment payload:", JSON.stringify(paymentPayload, null, 2));
 
       const response = await fetch(
         `https://api-sandbox.coinflow.cash/api/checkout/card/swe-challenge`,
@@ -219,14 +253,18 @@ function PciCompliantCheckout({
       );
 
       const result = await response.json();
+      console.log("New card payment API response:", { status: response.status, result });
 
       if (!response.ok) {
-        throw new Error(result.message || `Payment failed: ${response.status}`);
+        console.error("New card payment failed:", result);
+        console.error("Validation details:", result.details);
+        throw new Error(result.message || result.error || `Payment failed: ${response.status}`);
       }
 
       setState("success");
       onSuccess();
     } catch (err) {
+      console.error("New card payment error:", err);
       setError(err instanceof Error ? err.message : "Payment failed");
       setState("error");
     }
@@ -347,7 +385,7 @@ function PciCompliantCheckout({
       </div>
 
       {/* New Card Form */}
-      {useNewCard && (
+      {useNewCard && wallet?.publicKey && (
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
