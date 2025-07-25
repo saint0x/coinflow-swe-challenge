@@ -13,14 +13,13 @@
     "@coinflowlabs/react": "^5.0.2",
     "@headlessui/react": "^2.1.2",
     "@phantasia/nft-store-interface": "2.0.8",
-    "@privy-io/react-auth": "^1.60.0",
+    "@privy-io/react-auth": "^1.75.0",
     "@solana/web3.js": "1.78.0",
     "boxicons": "2.1.4",
-    "bs58": "5.0.0",
+    "bs58": "^5.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "6.14.1",
-    "rpc-websockets": "7.5.1"
+    "react-router-dom": "6.14.1"
   },
   "devDependencies": {
     "@types/jest": "^29.5.3",
@@ -55,9 +54,5 @@
     "url": "^0.11.1",
     "vite": "^5.3.4",
     "vite-plugin-node-polyfills": "^0.22.0"
-  },
-  "overrides": {
-    "tslib": "^2.4.0",
-    "rpc-websockets": "7.5.1"
   }
 }

@@ -530,7 +530,7 @@ function PciCompliantCheckout({
               <input
                 type="text"
                 placeholder="MM/YY"
-                className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white text-black"
                 value={expiryDate}
                 onChange={(e) => {
                   // Handle expiry date formatting
@@ -569,7 +569,7 @@ function PciCompliantCheckout({
                   onChange={(e) =>
                     setBillingInfo({ ...billingInfo, name: e.target.value })
                   }
-                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white text-black"
                   required
                 />
               </div>
@@ -583,7 +583,7 @@ function PciCompliantCheckout({
                   onChange={(e) =>
                     setBillingInfo({ ...billingInfo, email: e.target.value })
                   }
-                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white text-black"
                   required
                 />
               </div>
@@ -599,7 +599,7 @@ function PciCompliantCheckout({
                 onChange={(e) =>
                   setBillingInfo({ ...billingInfo, address: e.target.value })
                 }
-                className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white text-black"
                 required
               />
             </div>
@@ -615,7 +615,7 @@ function PciCompliantCheckout({
                   onChange={(e) =>
                     setBillingInfo({ ...billingInfo, city: e.target.value })
                   }
-                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white text-black"
                   required
                 />
               </div>
@@ -629,7 +629,7 @@ function PciCompliantCheckout({
                   onChange={(e) =>
                     setBillingInfo({ ...billingInfo, state: e.target.value })
                   }
-                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white text-black"
                   required
                 />
               </div>
@@ -643,7 +643,7 @@ function PciCompliantCheckout({
                   onChange={(e) =>
                     setBillingInfo({ ...billingInfo, zip: e.target.value })
                   }
-                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white text-black"
                   required
                 />
               </div>
