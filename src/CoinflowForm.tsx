@@ -1,25 +1,29 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useCallback } from "react";
 import {
   CoinflowCardNumberInput,
   CoinflowCvvInput,
-  CoinflowCvvOnlyInput,
   CardType,
 } from "@coinflowlabs/react";
 import { NftSuccessModal } from "./modals/NftSuccessModal";
 import { useWallet } from "./wallet/Wallet.tsx";
 import { LoadingSpinner } from "./App.tsx";
+import { SavedCardRow } from "./components/SavedCardRow";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { cardInputStyles, allowedOrigins } from "./utils/tokenex";
 
 export function CoinflowForm() {
   const [nftSuccessOpen, setNftSuccessOpen] = useState<boolean>(false);
 
   return (
-    <div className={"w-full flex-1 "}>
-      <CoinflowPurchaseWrapper
-        onSuccess={() => setNftSuccessOpen(true)}
-        subtotal={{ cents: 20_00 }}
-      />
-      <NftSuccessModal isOpen={nftSuccessOpen} setIsOpen={setNftSuccessOpen} />
-    </div>
+    <ErrorBoundary>
+      <div className={"w-full flex-1 "}>
+        <CoinflowPurchaseWrapper
+          onSuccess={() => setNftSuccessOpen(true)}
+          subtotal={{ cents: 20_00 }}
+        />
+        <NftSuccessModal isOpen={nftSuccessOpen} setIsOpen={setNftSuccessOpen} />
+      </div>
+    </ErrorBoundary>
   );
 }
 
@@ -30,9 +34,24 @@ function CoinflowPurchaseWrapper({
   onSuccess: () => void;
   subtotal: { cents: number };
 }) {
+  const { wallet } = useWallet();
+  
+  if (!wallet?.publicKey) {
+    return (
+      <div className="h-full flex-1 w-full relative pb-20 flex items-center justify-center">
+        <div className="text-center">
+          <LoadingSpinner className="!h-8 !w-8 mx-auto mb-4" />
+          <p className="text-gray-600">Connecting wallet...</p>
+        </div>
+      </div>
+    );
+  }
+  
   return (
     <div className={"h-full flex-1 w-full relative pb-20"}>
-      <PciCompliantCheckout onSuccess={onSuccess} subtotal={subtotal} />
+      <ErrorBoundary>
+        <PciCompliantCheckout onSuccess={onSuccess} subtotal={subtotal} />
+      </ErrorBoundary>
     </div>
   );
 }
@@ -42,6 +61,17 @@ type PaymentMethod = {
   token: string;
   last4: string;
   cardType: CardType;
+  cardholderName: string;
+  // Billing information stored with the card
+  email: string;
+  address: string;
+  city: string;
+  state: string;
+  zip: string;
+  country: string;
+  // Expiry information
+  expMonth: string;
+  expYear: string;
 };
 
 type CheckoutState = "idle" | "loading" | "processing" | "success" | "error";
@@ -63,17 +93,11 @@ function PciCompliantCheckout({
   const { wallet } = useWallet();
   const [state, setState] = useState<CheckoutState>("idle");
   const [error, setError] = useState<string | null>(null);
-  const [useNewCard, setUseNewCard] = useState(true);
   const [savedCards, setSavedCards] = useState<PaymentMethod[]>([]);
   const [selectedCard, setSelectedCard] = useState<PaymentMethod | null>(null);
+  const [addPaymentClicked, setAddPaymentClicked] = useState(false);
   const [totals, setTotals] = useState<{ fees?: number } | null>(null);
 
-  // Required origins for Coinflow components - must match exactly what's whitelisted
-  const allowedOrigins = [
-    "http://localhost:3000",
-    "http://localhost:3001", 
-    "http://localhost:3002"
-  ];
 
   // Refs for tokenization
   interface TokenResponse {
@@ -110,27 +134,19 @@ function PciCompliantCheckout({
     }
   }, [wallet?.publicKey]);
 
-  // Monitor TokenEx availability (one-time check)
-  React.useEffect(() => {
-    if (!wallet?.publicKey) return;
-    
-    const checkOnce = () => {
-      const hasTokenEx = typeof window !== 'undefined' && (window as any).TokenEx;
-      console.log('TokenEx availability:', hasTokenEx);
-    };
-    
-    // Check once after a short delay
-    const timeout = setTimeout(checkOnce, 3000);
-    return () => clearTimeout(timeout);
-  }, [wallet?.publicKey]);
+  // UX Contract - exact boolean expressions
+  const hasSavedCards = savedCards.length > 0;
+  const showNewCardForm = !hasSavedCards || addPaymentClicked;
 
-  // Debug wallet state for Coinflow components
+  // Auto-select first saved card when available
   React.useEffect(() => {
-    console.log("Wallet state for Coinflow:", { 
-      connected: !!wallet?.publicKey,
-      publicKey: wallet?.publicKey?.toString() 
-    });
-  }, [wallet?.publicKey]);
+    if (savedCards.length > 0 && !selectedCard) {
+      setSelectedCard(savedCards[0]);
+    }
+  }, [savedCards, selectedCard]);
+
+
+
 
 
   const loadTotals = async () => {
@@ -156,18 +172,113 @@ function PciCompliantCheckout({
 
       if (response.ok) {
         const data = await response.json();
-        setTotals(data);
+        if (data && typeof data.fees === 'number') {
+          setTotals(data);
+        } else {
+          setTotals({ fees: 50 }); // Default fallback
+        }
       } else {
-        setTotals({ fees: 50 }); // Default fee
+        setTotals({ fees: 50 }); // Default fee for API errors
       }
     } catch (error) {
-      setTotals({ fees: 50 }); // Default fee
+      // Network or parsing error - use default
+      setTotals({ fees: 50 });
     }
   };
 
   const loadSavedCards = async () => {
-    // TODO
-    setSavedCards([]);
+    const walletKey = wallet?.publicKey?.toString();
+    if (!walletKey) return;
+
+    const stored = sessionStorage.getItem(`coinflow-saved-cards-${walletKey}`);
+    if (stored) {
+      try {
+        const cards = JSON.parse(stored);
+        // Check if cards have the new format with billing info
+        const hasNewFormat = cards.length === 0 || (cards[0]?.email && cards[0]?.address);
+        
+        if (hasNewFormat) {
+          setSavedCards(cards);
+        } else {
+          // Old format - clear and start fresh
+          sessionStorage.removeItem(`coinflow-saved-cards-${walletKey}`);
+          setSavedCards([]);
+        }
+      } catch (error) {
+        setSavedCards([]);
+        sessionStorage.removeItem(`coinflow-saved-cards-${walletKey}`);
+      }
+    } else {
+      setSavedCards([]);
+    }
+  };
+
+  const deleteCard = useCallback(async (cardId: string) => {
+    const updatedCards = savedCards.filter(c => c.id !== cardId);
+    setSavedCards(updatedCards);
+    const walletKey = wallet?.publicKey?.toString();
+    if (walletKey) {
+      sessionStorage.setItem(`coinflow-saved-cards-${walletKey}`, JSON.stringify(updatedCards));
+    }
+    if (selectedCard?.id === cardId) {
+      setSelectedCard(null);
+    }
+    // If this was the last card, trigger form to show
+    if (updatedCards.length === 0) {
+      setAddPaymentClicked(true);
+    }
+  }, [savedCards, selectedCard, wallet?.publicKey]);
+
+  const selectCard = useCallback((card: PaymentMethod) => {
+    setSelectedCard(card);
+    setAddPaymentClicked(false);
+  }, []);
+
+  const saveCardAfterSuccess = async (cardToken: string, _paymentResult: any) => {
+    const walletKey = wallet?.publicKey?.toString();
+    if (!walletKey) return;
+
+    const cardLast4 = cardToken.slice(-4);
+    const [expMonth, expYear] = expiryDate.split("/");
+    const formattedExpYear = expYear.length === 4 ? expYear.slice(-2) : expYear.padStart(2, '0');
+    
+    // Detect card type from token's first digit
+    const detectCardType = (token: string): CardType => {
+      // This is a simplified detection - in production you'd want more sophisticated logic
+      const firstDigit = token.charAt(0);
+      if (firstDigit === '4') return CardType.VISA;
+      if (firstDigit === '5') return CardType.MASTERCARD;
+      if (firstDigit === '3') return CardType.AMEX;
+      return CardType.VISA; // Default fallback
+    };
+
+    const newCard: PaymentMethod = {
+      id: `card_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      token: cardToken,
+      last4: cardLast4,
+      cardType: detectCardType(cardToken),
+      cardholderName: billingInfo.name,
+      // Store all billing information
+      email: billingInfo.email,
+      address: billingInfo.address,
+      city: billingInfo.city,
+      state: billingInfo.state,
+      zip: billingInfo.zip,
+      country: billingInfo.country,
+      // Store expiry information
+      expMonth: expMonth,
+      expYear: formattedExpYear,
+    };
+
+    const existingCards = sessionStorage.getItem(`coinflow-saved-cards-${walletKey}`);
+    const cards = existingCards ? JSON.parse(existingCards) : [];
+    
+    const cardExists = cards.some((card: PaymentMethod) => card.last4 === cardLast4);
+    if (!cardExists) {
+      cards.push(newCard);
+      sessionStorage.setItem(`coinflow-saved-cards-${walletKey}`, JSON.stringify(cards));
+      setSavedCards(cards);
+    }
   };
 
   const handleNewCardPayment = async () => {
@@ -198,18 +309,22 @@ function PciCompliantCheckout({
       setError(null);
 
       // Get the tokenized card data from the Coinflow components
-      console.log("Getting token from card input...");
       const cardTokenResponse = await cardNumberRef.current.getToken();
-      console.log("Token response:", cardTokenResponse);
 
       if (!cardTokenResponse || !cardTokenResponse.token) {
         throw new Error("Failed to tokenize card data. Please check your card number.");
       }
 
-      // Parse expiry date
+      // Parse and validate expiry date
       const [expMonth, expYear] = expiryDate.split("/");
-      // Ensure expYear is exactly 2 digits
-      const formattedExpYear = expYear.length === 4 ? expYear.slice(-2) : expYear.padStart(2, '0');
+      if (!expMonth || !expYear || expMonth.length !== 2 || expYear.length !== 2) {
+        throw new Error("Please enter a valid expiry date in MM/YY format.");
+      }
+      const monthNum = parseInt(expMonth, 10);
+      if (monthNum < 1 || monthNum > 12) {
+        throw new Error("Please enter a valid month (01-12).");
+      }
+      const formattedExpYear = expYear;
 
       // Prepare the payment payload according to Coinflow API docs
       const paymentPayload = {
@@ -225,18 +340,17 @@ function PciCompliantCheckout({
           expYear: formattedExpYear,
           expMonth: expMonth,
           email: billingInfo.email,
-          firstName: billingInfo.name.split(" ")[0] || "test",
-          lastName: billingInfo.name.split(" ")[1] || "test",
+          firstName: billingInfo.name.split(" ")[0] || billingInfo.name,
+          lastName: billingInfo.name.split(" ").slice(1).join(" ") || "User",
           address1: billingInfo.address,
           city: billingInfo.city,
           zip: billingInfo.zip,
-          state: billingInfo.state.length > 2 ? "NY" : billingInfo.state,
+          state: billingInfo.state.length > 2 ? billingInfo.state.substring(0, 2).toUpperCase() : billingInfo.state,
           country: billingInfo.country,
           cardToken: cardTokenResponse.token,
         },
       };
 
-      console.log("Payment payload:", JSON.stringify(paymentPayload, null, 2));
 
       const response = await fetch(
         `https://api-sandbox.coinflow.cash/api/checkout/card/swe-challenge`,
@@ -253,19 +367,20 @@ function PciCompliantCheckout({
       );
 
       const result = await response.json();
-      console.log("New card payment API response:", { status: response.status, result });
 
       if (!response.ok) {
-        console.error("New card payment failed:", result);
-        console.error("Validation details:", result.details);
         throw new Error(result.message || result.error || `Payment failed: ${response.status}`);
       }
 
       setState("success");
+      
+      // Save the card for future use
+      await saveCardAfterSuccess(cardTokenResponse.token, result);
+      
       onSuccess();
     } catch (err) {
-      console.error("New card payment error:", err);
-      setError(err instanceof Error ? err.message : "Payment failed");
+      const errorMessage = err instanceof Error ? err.message : "An unexpected error occurred during payment processing.";
+      setError(errorMessage);
       setState("error");
     }
   };
@@ -283,23 +398,33 @@ function PciCompliantCheckout({
       // Get the refreshed token with CVV
       const cvvTokenResponse = await cvvOnlyRef.current.getToken();
 
-      // Prepare the payment payload for saved card according to API docs
+      // Prepare the payment payload for saved card - same as new card but with CVV token
       const paymentPayload = {
         subtotal: subtotal,
-        transactionData: {
-          type: "safeMint",
-        },
         authentication3DS: {
           concludeChallenge: true,
-          deviceInfo: {
-            completionIndicator: 1,
-          },
+          colorDepth: 24,
+          screenHeight: 1080,
+          screenWidth: 1920,
+          timeZone: -240
         },
-        token: cvvTokenResponse.token,
+        card: {
+          expYear: selectedCard.expYear,
+          expMonth: selectedCard.expMonth,
+          email: selectedCard.email,
+          firstName: selectedCard.cardholderName.split(" ")[0] || selectedCard.cardholderName,
+          lastName: selectedCard.cardholderName.split(" ").slice(1).join(" ") || "User",
+          address1: selectedCard.address,
+          city: selectedCard.city,
+          zip: selectedCard.zip,
+          state: selectedCard.state.length > 2 ? "NY" : selectedCard.state,
+          country: selectedCard.country,
+          cardToken: cvvTokenResponse.token,
+        },
       };
 
       const response = await fetch(
-        `https://api-sandbox.coinflow.cash/api/checkout/token/swe-challenge`,
+        `https://api-sandbox.coinflow.cash/api/checkout/card/swe-challenge`,
         {
           method: "POST",
           headers: {
@@ -315,33 +440,18 @@ function PciCompliantCheckout({
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.message || `Payment failed: ${response.status}`);
+        throw new Error(result.message || result.error || `Payment failed: ${response.status}`);
       }
 
       setState("success");
       onSuccess();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Payment failed");
+      const errorMessage = err instanceof Error ? err.message : "An unexpected error occurred during payment processing.";
+      setError(errorMessage);
       setState("error");
     }
   };
 
-  const cardInputStyles = {
-    base: "font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif; padding: 12px 16px; border: 1px solid #d1d5db; margin: 0; width: 100%; font-size: 14px; line-height: 20px; height: 48px; box-sizing: border-box; border-radius: 8px; background: white !important;",
-    focus:
-      "box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1); border: 1px solid #3b82f6; outline: 0;",
-    error:
-      "box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1); border: 1px solid #ef4444;",
-    cvv: {
-      base: "font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif; padding: 12px 16px; border: 1px solid #d1d5db; margin: 0; width: 100%; font-size: 14px; line-height: 20px; height: 48px; box-sizing: border-box; border-radius: 8px; background: white !important;",
-      focus:
-        "box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1); border: 1px solid #3b82f6; outline: 0;",
-      error:
-        "box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1); border: 1px solid #ef4444;",
-    },
-  };
-
-  // Wallet should be stable from parent component (App.tsx)
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-6">
@@ -357,35 +467,47 @@ function PciCompliantCheckout({
 
       {/* Payment Method Selection */}
       <div className="space-y-4">
-        <div className="flex space-x-4">
-          <button
-            onClick={() => setUseNewCard(true)}
-            className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
-              useNewCard
-                ? "bg-blue-100 text-blue-700 border border-blue-200"
-                : "bg-gray-50 text-gray-700 border border-gray-200 hover:bg-gray-100"
-            }`}
-          >
-            New Card
-          </button>
-          <button
-            onClick={() => setUseNewCard(false)}
-            disabled={savedCards.length === 0}
-            className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
-              !useNewCard
-                ? "bg-blue-100 text-blue-700 border border-blue-200"
-                : savedCards.length === 0
-                ? "bg-gray-50 text-gray-400 border border-gray-200 cursor-not-allowed"
-                : "bg-gray-50 text-gray-700 border border-gray-200 hover:bg-gray-100"
-            }`}
-          >
-            Saved Cards {savedCards.length > 0 && `(${savedCards.length})`}
-          </button>
+        <div className="space-y-3">
+          <div className="text-sm font-medium text-gray-700">Pay with:</div>
+          
+          {/* Saved Cards Section */}
+          {hasSavedCards && (
+            <div className="space-y-2">
+              {savedCards.map((card) => (
+                <SavedCardRow
+                  key={card.id}
+                  card={card}
+                  isSelected={selectedCard?.id === card.id && !addPaymentClicked}
+                  onSelect={selectCard}
+                  onDelete={deleteCard}
+                  cvvRef={selectedCard?.id === card.id ? cvvOnlyRef : undefined}
+                />
+              ))}
+            </div>
+          )}
+          
+          {/* Add Payment Method Button - Only show if there are saved cards */}
+          {hasSavedCards && (
+            <button
+              onClick={() => {
+                setAddPaymentClicked(true);
+                setSelectedCard(null);
+              }}
+              className={`w-full flex items-center justify-center space-x-2 p-3 border-2 border-dashed rounded-lg transition-colors ${
+                addPaymentClicked
+                  ? "border-blue-500 bg-blue-50 text-blue-700"
+                  : "border-gray-300 text-gray-600 hover:border-gray-400"
+              }`}
+            >
+              <span className="text-lg">+</span>
+              <span className="font-medium">Add a payment method</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* New Card Form */}
-      {useNewCard && wallet?.publicKey && (
+      {/* New Card Form - Only show when showNewCardForm is true */}
+      {showNewCardForm && wallet?.publicKey && (
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -424,7 +546,7 @@ function PciCompliantCheckout({
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 CVV
               </label>
-              <div className="w-full h-12 border border-gray-300 rounded-md">
+              <div className="w-full h-12">
                 <CoinflowCvvInput />
               </div>
             </div>
@@ -530,74 +652,6 @@ function PciCompliantCheckout({
         </div>
       )}
 
-      {/* Saved Card Selection */}
-      {!useNewCard && savedCards.length > 0 && (
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Select Saved Card
-            </label>
-            <div className="space-y-2">
-              {savedCards.map((card) => (
-                <div
-                  key={card.id}
-                  onClick={() => setSelectedCard(card)}
-                  className={`p-4 border rounded-md cursor-pointer transition-colors ${
-                    selectedCard?.id === card.id
-                      ? "border-blue-500 bg-blue-50"
-                      : "border-gray-200 hover:border-gray-300"
-                  }`}
-                >
-                  <div className="flex items-center space-x-3">
-                    <div className="text-2xl">💳</div>
-                    <div>
-                      <div className="font-medium">
-                        **** **** **** {card.last4}
-                      </div>
-                      <div className="text-sm text-gray-500 capitalize">
-                        {card.cardType.toLowerCase()}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {selectedCard && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                CVV for **** {selectedCard.last4}
-              </label>
-              <div className="w-32">
-                <CoinflowCvvOnlyInput
-                  ref={cvvOnlyRef}
-                  merchantId="swe-challenge"
-                  env="sandbox"
-                  cardType={selectedCard.cardType}
-                  token={selectedCard.token}
-                  css={cardInputStyles}
-                  origins={allowedOrigins}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* No Saved Cards Message */}
-      {!useNewCard && savedCards.length === 0 && (
-        <div className="text-center py-8">
-          <div className="text-gray-400 text-4xl mb-2">💳</div>
-          <p className="text-gray-600">No saved cards found</p>
-          <button
-            onClick={() => setUseNewCard(true)}
-            className="mt-2 text-blue-600 hover:text-blue-700 text-sm font-medium"
-          >
-            Use a new card instead
-          </button>
-        </div>
-      )}
 
       {/* Order Summary */}
       {totals && (
@@ -639,12 +693,12 @@ function PciCompliantCheckout({
       {/* Payment Button */}
       <div>
         <button
-          onClick={useNewCard ? handleNewCardPayment : handleSavedCardPayment}
+          onClick={showNewCardForm ? handleNewCardPayment : handleSavedCardPayment}
           disabled={
             state === "processing" ||
             state === "loading" ||
-            (useNewCard && (!billingInfo.name || !billingInfo.email)) ||
-            (!useNewCard && !selectedCard)
+            (showNewCardForm && (!billingInfo.name || !billingInfo.email)) ||
+            (hasSavedCards && !showNewCardForm && !selectedCard)
           }
           className={`w-full py-3 px-4 rounded-md font-medium text-white transition-colors ${
             state === "processing" || state === "loading"
