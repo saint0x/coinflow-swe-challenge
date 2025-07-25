@@ -112,7 +112,7 @@ export function SavedCardRow({ card, isSelected, onSelect, onDelete, cvvRef }: S
         className="flex items-center justify-center"
         style={{ width: "25%" }}
       >
-        <div className="w-16 h-7">
+        <div className="w-16 h-7 overflow-hidden">
           {wallet?.publicKey && isTokenExReady ? (
             <CoinflowCvvOnlyInput
               ref={isSelected ? cvvOnlyRef : null}
